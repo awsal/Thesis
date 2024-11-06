@@ -9,7 +9,7 @@
  *                                                                    *
  * But if you let me know you're using my code, that would be freaking*
  * sweet.                                                             *
- * Modified by Aws Al-Baldawi as part of master's thesis at LTH 2024.                                                                  *
+ * Modified by Aws Al-Baldawi as part of master's thesis at LTH 2024. *
  **********************************************************************/
 
 #include <stdlib.h>
@@ -18,9 +18,10 @@
 #include <gmp.h>
 #include <time.h>
 
-#define MODULUS_SIZE 1024                   /* This is the number of bits we want in the modulus */
-#define BLOCK_SIZE (MODULUS_SIZE/8)         /* This is the size of a block that gets en/decrypted at once */
-#define BUFFER_SIZE ((MODULUS_SIZE/8) / 2)  /* This is the number of bytes in n and p */
+
+
+#define MODULUS_SIZE 2048             /* This is the number of bits we want in the modulus, this define the size of n */
+#define BUFFER_SIZE ((MODULUS_SIZE/8) / 2)  /* This is the number of bytes in p and q, less bytes will equal smaller p & q */
 
 
 typedef struct {
@@ -36,6 +37,7 @@ typedef struct {
     mpz_t q; /* Starting prime q */
 } private_key;
 
+/* Function to print a byte array in hexadecimal format */
 void print_hex(char* arr, int len)
 {
     int i;
@@ -43,7 +45,10 @@ void print_hex(char* arr, int len)
         printf("%02x", (unsigned char) arr[i]); 
 }
 
+
+/* Generate RSA keys : private ( ku ) and public ( kp ) */
 /* NOTE: Assumes mpz_t's are initted in ku and kp */
+
 void generate_keys(private_key* ku, public_key* kp)
 {
     char buf[BUFFER_SIZE];
@@ -51,10 +56,12 @@ void generate_keys(private_key* ku, public_key* kp)
     mpz_t phi; mpz_init(phi);
     mpz_t tmp1; mpz_init(tmp1);
     mpz_t tmp2; mpz_init(tmp2);
+    
 
     /* Insetead of selecting e st. gcd(phi, e) = 1; 1 < e < phi, lets choose e
-     * first then pick p,q st. gcd(e, p-1) = gcd(e, q-1) = 1 */
-    mpz_set_ui(ku->e, 3); 
+       first then pick p,q st. gcd(e, p-1) = gcd(e, q-1) = 1
+        Use higher primes will enhace the performance */
+    mpz_set_ui(ku->e, 65537); 
 
     /* Select p and q */
     /* Start with p */
@@ -65,13 +72,14 @@ void generate_keys(private_key* ku, public_key* kp)
     mpz_import(tmp1, BUFFER_SIZE, 1, sizeof(buf[0]), 0, 0, buf);
     mpz_nextprime(ku->p, tmp1);
 
+    /* Ensure p is coprime with e ( gcd (p -1 , e ) == 1) */
     mpz_mod(tmp2, ku->p, ku->e);
     while(!mpz_cmp_ui(tmp2, 1)) {
         mpz_nextprime(ku->p, ku->p);
         mpz_mod(tmp2, ku->p, ku->e);
     }
 
-    /* Now select q */
+    /* Select prime q , distinct from p */
     do {
         for(i = 0; i < BUFFER_SIZE; i++)
             buf[i] = rand() % 0xFF; 
@@ -108,73 +116,102 @@ void generate_keys(private_key* ku, public_key* kp)
     return;
 }
 
+
 int main()
 {
+    /* The number of keys to be generated */
+    int no_of_keys = 100;
 
-    int no_of_keys = 1000;
+    /* All the following arrays can be retrieved as or printed into a text file if needed */
+    /* Number of hex digit for 2048 bits is (2048 / 4) + 1, each hex digit is 4 bits and 1 as the 0 terminator */
+
+    char public_keys[no_of_keys][513];    
+    char private_keys_p[no_of_keys][257];
+    char private_keys_q[no_of_keys][257];
     
-    char public_keys[no_of_keys][2048];
-    char private_keys_p[no_of_keys][1024];
-    char private_keys_q[no_of_keys][1024];
-    char private_keys_d[no_of_keys][1024];
-    
-    // Seed the random number generator once
-    srand(time(NULL));  
 
     
-    mpz_t M;  mpz_init(M);
-    mpz_t C;  mpz_init(C);
-    mpz_t DC;  mpz_init(DC);
+
     private_key ku;
     public_key kp;
+    
 
-    // Initialize public and private keys
-    mpz_init(kp.n);
-    mpz_init(kp.e); 
-    mpz_init(ku.n); 
-    mpz_init(ku.e); 
-    mpz_init(ku.d); 
-    mpz_init(ku.p); 
-    mpz_init(ku.q); 
+    /* Seed the random number generator once, otherwise it may no generate different prime numbers.
+    Note that we use time () and not clock () to ensure the compatibility with Wasm */
+    srand(time(NULL));
+    
 
-
-
-    time_t start, end;
+    struct timespec start, end;
     double tot_time = 0;
 
+    /*FILE *file = fopen("rsa_keys.txt", "w");
+    if (!file) {
+        perror("Failed to open file");
+        return 1;
+    }*/
+
     for (int i = 0; i < no_of_keys; i++) {
-	//clock do not work in wasi
-	//clock_t start = clock();
-	time(&start);
+
+       
+	// Initialize public and private keys
+        mpz_init(kp.n);
+        mpz_init(kp.e);
+        mpz_init(ku.n);
+        mpz_init(ku.e);
+        mpz_init(ku.d);
+        mpz_init(ku.p);
+        mpz_init(ku.q);
+        // Get the current time
+        clock_gettime(CLOCK_MONOTONIC, &start);
+
+        // Generate RSA keys
         generate_keys(&ku, &kp);
-	//clock_t end = clock();
-	time(&end);
-	//double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
-	//tot_time = tot_time + time_spent;
-        double time_spent = difftime(end, start);
+
+        // Get the current time again
+        clock_gettime(CLOCK_MONOTONIC, &end);
+
+        // Calculate elapsed time in seconds
+        double time_spent = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
         tot_time += time_spent;
-	// Saving the generated public and private keys
+
+        // Saving the generated public and private keys
         strcpy(public_keys[i], mpz_get_str(NULL, 16, kp.n));
         strcpy(private_keys_p[i], mpz_get_str(NULL, 16, ku.p));
         strcpy(private_keys_q[i], mpz_get_str(NULL, 16, ku.q));
-        strcpy(private_keys_d[i], mpz_get_str(NULL, 16, ku.d));
-
+        
+	
+	/* Saving the rsults inot a text file. */
+	//fprintf(file, "Key Pair %d:\n", i + 1);
+        //fprintf(file, "Public Key (n): 0x%s\n", public_keys[i]);
+        //fprintf(file, "Private Key (p): 0x%s\n", private_keys_p[i]);
+        //fprintf(file, "Private Key (q): 0x%s\n", private_keys_q[i]);
+        
+	// Clear the memory allocated for keys
+        mpz_clear(kp.n);
+        mpz_clear(kp.e);
+        mpz_clear(ku.n);
+        mpz_clear(ku.e);
+        mpz_clear(ku.d);
+        mpz_clear(ku.p);
+        mpz_clear(ku.q);
     }
 
+    /*fprintf(file, "Time taken to generate %d RSA keys: %.9f seconds\n", no_of_keys, tot_time);
+    fclose(file);*/
+
+    printf("Time taken to generate %d RSA keys: %.9f seconds\n", no_of_keys, tot_time);
+
+    // Print generated RSA keys
+   // for (int i = 0; i < no_of_keys; i++) {
+   //     printf("Key Pair %d:\n", i + 1);
+   //     printf("Public Key (n): 0x%s\n", public_keys[i]);
+   //     printf("Private Key (p): 0x%s\n", private_keys_p[i]);
+   //     printf("Private Key (q): 0x%s\n", private_keys_q[i]);
+   //     printf("\n");
+   // }
+
     
-    
-    printf("Time taken to generate %d RSA keys: %.2f seconds\n", no_of_keys, tot_time);
-    
-    
-    //printf("\nGenerated RSA Keys (Public and Private in hex format):\n");
-    //for (int i = 0; i < no_of_keys; i++) {
-    //    printf("Key Pair %d:\n", i + 1);
-    //    printf("Public Key (n): 0x%s\n", public_keys[i]);
-    //    printf("Private Key (p): 0x%s\n", private_keys_p[i]);
-    //    printf("Private Key (q): 0x%s\n", private_keys_q[i]);
-    //    printf("Private Key (d): 0x%s\n", private_keys_d[i]);
-    //    printf("\n");
-    //}
 
     return 0;
+
 }
